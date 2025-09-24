@@ -106,11 +106,26 @@ fi
 print_status "Starting services with PM2..."
 deactivate || true
 cd ..
+
+# Get absolute paths
+PROJECT_ROOT="$(pwd)"
+VENV_PATH="${PROJECT_ROOT}/server/venv"
+SERVER_PATH="${PROJECT_ROOT}/server"
+
 npm i -g pm2 >/dev/null 2>&1 || true
 # Update PM2 in-memory to match local version to avoid warnings
 pm2 update || true
-pm2 start npm --name "yttmp3-web" -- start || pm2 restart yttmp3-web
-pm2 start "server/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 app:app" --name "yttmp3-api" --cwd "$(pwd)/server" || pm2 restart yttmp3-api
+
+# Clean up any existing processes first
+pm2 delete yttmp3-web 2>/dev/null || true
+pm2 delete yttmp3-api 2>/dev/null || true
+
+# Start Next.js frontend
+pm2 start npm --name "yttmp3-web" -- start
+
+# Start Flask API with correct paths
+pm2 start "${VENV_PATH}/bin/gunicorn" --name "yttmp3-api" --cwd "${SERVER_PATH}" -- -w 2 -b 0.0.0.0:5000 app:app
+
 pm2 save
 
 # Configure nginx
@@ -124,8 +139,14 @@ if [ -f "nginx.conf" ]; then
     # Disable default site
     sudo rm -f /etc/nginx/sites-enabled/default
     if sudo nginx -t; then
-        sudo systemctl reload nginx
-        print_status "nginx configured and reloaded."
+        # Start nginx if it's not running, otherwise reload
+        if ! sudo systemctl is-active --quiet nginx; then
+            sudo systemctl start nginx
+            print_status "nginx started and configured."
+        else
+            sudo systemctl reload nginx
+            print_status "nginx configured and reloaded."
+        fi
     else
         print_error "nginx configuration test failed. Leaving previous config active."
         echo "Check the file at $NGINX_SITE and run: sudo nginx -t && sudo systemctl reload nginx"
