@@ -1,19 +1,38 @@
 {
-  "name": "nextjs-youtube-dl",
-  "version": "0.1.0",
+  "name": "yttmp3-com",
+  "version": "1.0.0",
   "private": true,
+  "description": "YouTube to MP3 converter - Fast, free, and secure",
+  "keywords": [
+    "youtube",
+    "mp3",
+    "converter",
+    "downloader",
+    "audio",
+    "nextjs"
+  ],
+  "author": "YTTMP3.com",
+  "license": "MIT",
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
-    "start": "next start"
+    "start": "next start",
+    "lint": "next lint",
+    "deploy": "./deploy.sh"
   },
   "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
+    "next": "15.5.3",
     "react": "19.1.0",
     "react-dom": "19.1.0",
-    "next": "15.5.3"
+    "youtube-dl-exec": "^3.0.25"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
     "tailwindcss": "^4"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=8.0.0"
   }
 }

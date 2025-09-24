@@ -39,3 +39,17 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# python
+server/venv/
+venv/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.python-version
+
+# yt-dlp cookies and temp
+cookies.txt
+*.part
+tmp/
