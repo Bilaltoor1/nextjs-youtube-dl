@@ -45,8 +45,13 @@ print_status "Installing system dependencies (nginx, ffmpeg, python3-venv)..."
 sudo apt-get update -y
 sudo apt-get install -y nginx ffmpeg python3-venv python3-pip
 
-print_status "Installing Node dependencies..."
-npm ci --omit=dev || npm install --production
+print_status "Installing Node dependencies (including dev for build)..."
+if command -v npm &>/dev/null; then
+    npm ci || npm install
+else
+    print_error "npm not found after attempted install."
+    exit 1
+fi
 
 # Check if cookies.txt exists and has content
 if [ ! -f "cookies.txt" ] || [ ! -s "cookies.txt" ]; then

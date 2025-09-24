@@ -14,8 +14,8 @@
   "author": "YTTMP3.com",
   "license": "MIT",
   "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build --turbopack",
+    "dev": "next dev",
+    "build": "next build",
     "start": "next start",
     "lint": "next lint",
     "deploy": "./deploy.sh"
