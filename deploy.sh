@@ -29,15 +29,23 @@ print_error() {
 DOMAIN=${DOMAIN:-yttmp3.com}
 EMAIL=${EMAIL:-admin@${DOMAIN}}
 
-# Check if Node.js & npm are installed
+# Check if Node.js & npm are installed and ensure Node >= 20
 if ! command -v node &> /dev/null; then
-    print_status "Installing Node.js (using apt)..."
+    print_status "Installing Node.js 20.x (using apt)..."
     curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
     sudo apt-get install -y nodejs
 fi
 if ! command -v npm &> /dev/null; then
     print_error "npm is not available after Node install. Aborting."
     exit 1
+fi
+
+# Verify Node.js version
+NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
+if [ "$NODE_MAJOR" -lt 20 ]; then
+    print_warning "Node.js v$NODE_MAJOR detected; upgrading to >=20 for compatibility..."
+    curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+    sudo apt-get install -y nodejs
 fi
 
 # Install system dependencies
@@ -47,7 +55,10 @@ sudo apt-get install -y nginx ffmpeg python3-venv python3-pip
 
 print_status "Installing Node dependencies (including dev for build)..."
 if command -v npm &>/dev/null; then
-    npm ci || npm install
+    if ! npm ci; then
+        print_warning "npm ci failed; falling back to npm install"
+        npm install
+    fi
 else
     print_error "npm not found after attempted install."
     exit 1
@@ -96,6 +107,8 @@ print_status "Starting services with PM2..."
 deactivate || true
 cd ..
 npm i -g pm2 >/dev/null 2>&1 || true
+# Update PM2 in-memory to match local version to avoid warnings
+pm2 update || true
 pm2 start npm --name "yttmp3-web" -- start || pm2 restart yttmp3-web
 pm2 start "server/venv/bin/gunicorn -w 2 -b 0.0.0.0:5000 app:app" --name "yttmp3-api" --cwd "$(pwd)/server" || pm2 restart yttmp3-api
 pm2 save
@@ -110,8 +123,13 @@ if [ -f "nginx.conf" ]; then
     sudo ln -sf "$NGINX_SITE" "/etc/nginx/sites-enabled/${DOMAIN}"
     # Disable default site
     sudo rm -f /etc/nginx/sites-enabled/default
-    sudo nginx -t && sudo systemctl reload nginx
-    print_status "nginx configured and reloaded."
+    if sudo nginx -t; then
+        sudo systemctl reload nginx
+        print_status "nginx configured and reloaded."
+    else
+        print_error "nginx configuration test failed. Leaving previous config active."
+        echo "Check the file at $NGINX_SITE and run: sudo nginx -t && sudo systemctl reload nginx"
+    fi
 else
     print_warning "nginx.conf not found in project root. Skipping nginx config."
 fi
