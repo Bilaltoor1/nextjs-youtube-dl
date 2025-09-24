@@ -14,6 +14,10 @@ from flask_cors import CORS
 import yt_dlp
 from datetime import datetime
 import logging
+import time
+import random
+from functools import wraps
+from collections import defaultdict
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -36,8 +40,55 @@ TEMP_DIR = tempfile.mkdtemp(prefix="yttmp3_")
 MAX_FILESIZE = 500 * 1024 * 1024  # 500MB
 COOKIES_FILE = Path(__file__).parent.parent / "cookies.txt"
 
+# Rate limiting storage (in production, use Redis)
+request_counts = defaultdict(list)
+RATE_LIMIT = 10  # requests per minute per IP
+RATE_WINDOW = 60  # seconds
+
+def rate_limit(f):
+    """Rate limiting decorator like competitor sites"""
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        client_ip = request.environ.get('HTTP_X_REAL_IP', request.remote_addr)
+        current_time = time.time()
+        
+        # Clean old requests
+        request_counts[client_ip] = [
+            req_time for req_time in request_counts[client_ip]
+            if current_time - req_time < RATE_WINDOW
+        ]
+        
+        # Check rate limit
+        if len(request_counts[client_ip]) >= RATE_LIMIT:
+            logger.warning(f"Rate limit exceeded for IP: {client_ip}")
+            return jsonify({
+                'error': 'Too many requests. Please wait a moment and try again.',
+                'retry_after': 60
+            }), 429
+        
+        # Add current request
+        request_counts[client_ip].append(current_time)
+        
+        # Add random delay to mimic human behavior
+        time.sleep(random.uniform(0.1, 0.3))
+        
+        return f(*args, **kwargs)
+    return decorated_function
+
 def get_ydl_opts(output_path=None, extract_flat=False, cookies_file=None):
     """Get yt-dlp options with proper headers and cookies"""
+    
+    import random
+    import time
+    
+    # Rotate User Agents to avoid detection
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/121.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:109.0) Gecko/20100101 Firefox/121.0'
+    ]
     
     opts = {
         'quiet': True,
@@ -49,29 +100,39 @@ def get_ydl_opts(output_path=None, extract_flat=False, cookies_file=None):
         'writeautomaticsub': False,
         'ignoreerrors': False,
         'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-            'Accept-Encoding': 'gzip,deflate',
-            'Accept-Charset': 'ISO-8859-1,utf-8;q=0.7,*;q=0.7',
-            'Keep-Alive': '300',
+            'User-Agent': random.choice(user_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
             'Connection': 'keep-alive',
             'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0',
         },
-        # Additional options to bypass restrictions
+        # Enhanced extractor args
         'extractor_args': {
             'youtube': {
-                'skip': ['dash', 'hls'],  # Skip DASH and HLS to avoid some blocks
-                'player_client': ['android', 'web'],  # Use multiple clients
-                'player_skip': ['configs'],  # Skip config requests that might be blocked
+                'skip': ['dash', 'hls'],
+                'player_client': ['android', 'ios', 'web'],
+                'player_skip': ['configs'],
+                'lang': ['en'],
+                'comment_sort': ['top'],
             }
         },
-        # Retry configuration
-        'retries': 3,
-        'sleep_interval': 1,
-        'max_sleep_interval': 5,
+        # Enhanced retry configuration
+        'retries': 5,
+        'fragment_retries': 5,
+        'sleep_interval': random.uniform(0.5, 2.0),
+        'max_sleep_interval': 8,
+        'sleep_interval_subtitles': 1,
         # Use different extraction methods
         'youtube_include_dash_manifest': False,
+        'extract_flat': extract_flat,
+        # Add random delays to mimic human behavior
+        'throttledratelimit': None,
     }
     
     # Add cookies if available
@@ -106,8 +167,12 @@ def health_check():
     })
 
 @app.route('/api/video-info', methods=['POST'])
+@rate_limit
 def get_video_info():
     """Get YouTube video information"""
+    import random
+    import time
+    
     try:
         data = request.get_json()
         if not data or 'url' not in data:
@@ -119,35 +184,46 @@ def get_video_info():
         
         logger.info(f"Fetching info for URL: {url}")
         
-        # Try without cookies first (sometimes works better)
-        ydl_opts_no_cookies = get_ydl_opts(extract_flat=False, cookies_file=None)
+        # Add random delay to avoid rate limiting (like competitor)
+        time.sleep(random.uniform(0.1, 0.5))
         
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts_no_cookies) as ydl:
-                info = ydl.extract_info(url, download=False)
-                logger.info("Successfully extracted info without cookies")
-        except Exception as e1:
-            logger.warning(f"Failed without cookies: {e1}")
-            # Try with cookies as fallback
+        # Multiple fallback strategies
+        strategies = [
+            # Strategy 1: No cookies, web client
+            lambda: get_ydl_opts(extract_flat=False, cookies_file=None),
+            # Strategy 2: With cookies, web client
+            lambda: get_ydl_opts(extract_flat=False, cookies_file=COOKIES_FILE),
+            # Strategy 3: Android client (most reliable)
+            lambda: {**get_ydl_opts(extract_flat=False, cookies_file=COOKIES_FILE), 
+                    'extractor_args': {'youtube': {'player_client': ['android']}},
+                    'http_headers': {**get_ydl_opts()['http_headers'], 
+                                   'User-Agent': 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'}},
+            # Strategy 4: iOS client
+            lambda: {**get_ydl_opts(extract_flat=False, cookies_file=None),
+                    'extractor_args': {'youtube': {'player_client': ['ios']}},
+                    'http_headers': {**get_ydl_opts()['http_headers'],
+                                   'User-Agent': 'com.google.ios.youtube/19.09.3 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)'}}
+        ]
+        
+        info = None
+        for i, get_strategy in enumerate(strategies):
             try:
-                ydl_opts_with_cookies = get_ydl_opts(extract_flat=False, cookies_file=COOKIES_FILE)
-                with yt_dlp.YoutubeDL(ydl_opts_with_cookies) as ydl:
+                ydl_opts = get_strategy()
+                logger.info(f"Trying strategy {i+1}/4")
+                
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     info = ydl.extract_info(url, download=False)
-                    logger.info("Successfully extracted info with cookies")
-            except Exception as e2:
-                logger.error(f"Failed with cookies too: {e2}")
-                # Try with different extractor args
-                try:
-                    ydl_opts_fallback = get_ydl_opts(extract_flat=False, cookies_file=None)
-                    ydl_opts_fallback['extractor_args']['youtube']['player_client'] = ['android']
-                    ydl_opts_fallback['http_headers']['User-Agent'] = 'com.google.android.youtube/17.36.4 (Linux; U; Android 12) gzip'
+                    logger.info(f"Successfully extracted info using strategy {i+1}")
+                    break
                     
-                    with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
-                        info = ydl.extract_info(url, download=False)
-                        logger.info("Successfully extracted info with Android client")
-                except Exception as e3:
-                    logger.error(f"All methods failed: {e3}")
-                    raise e3
+            except Exception as e:
+                logger.warning(f"Strategy {i+1} failed: {str(e)[:200]}")
+                if i < len(strategies) - 1:
+                    # Random delay between retries
+                    time.sleep(random.uniform(0.5, 1.5))
+                else:
+                    logger.error(f"All strategies failed. Last error: {e}")
+                    raise e
         
         if not info:
             return jsonify({'error': 'Could not extract video information'}), 404
@@ -205,8 +281,12 @@ def get_video_info():
         }), 500
 
 @app.route('/api/download', methods=['POST'])
+@rate_limit
 def download_video():
     """Download YouTube video as MP3"""
+    import random
+    import time
+    
     try:
         data = request.get_json()
         if not data or 'url' not in data:
@@ -217,6 +297,9 @@ def download_video():
         
         logger.info(f"Starting download for: {title}")
         
+        # Add random delay like competitor
+        time.sleep(random.uniform(0.2, 0.8))
+        
         # Clean filename
         safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).strip()
         safe_title = safe_title[:100]  # Limit length
@@ -224,8 +307,10 @@ def download_video():
         # Create temporary output file
         output_file = os.path.join(TEMP_DIR, f"{safe_title}.%(ext)s")
         
-        # Get yt-dlp options for download
+        # Use the most reliable strategy for downloads (Android client with cookies)
         ydl_opts = get_ydl_opts(output_path=output_file, cookies_file=COOKIES_FILE)
+        ydl_opts['extractor_args']['youtube']['player_client'] = ['android', 'ios']
+        ydl_opts['http_headers']['User-Agent'] = 'com.google.android.youtube/19.09.37 (Linux; U; Android 11) gzip'
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             # Download and convert to MP3
